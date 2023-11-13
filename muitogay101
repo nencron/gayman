@@ -1,0 +1,76 @@
+import yfinance as yf
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Define the common QQQ holdings
+qqq_holdings = ["AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA", "PYPL", "INTC", "CMCSA"]
+
+# Define the start and end dates for data retrieval
+start_date = "2019-01-01"  # Replace with your start date
+end_date = "2023-11-11"    # Replace with your end date
+
+# Fetch historical data for these stocks
+stock_data = {}
+for stock in qqq_holdings:
+    stock_data[stock] = yf.download(stock, start=start_date, end=end_date)
+
+# Calculate moving averages and momentum scores
+for stock, data in stock_data.items():
+    data['ma_10'] = data['Close'].rolling(window=10).mean()
+    data['ma_20'] = data['Close'].rolling(window=20).mean()
+    data['ma_50'] = data['Close'].rolling(window=50).mean()
+    data['momentum_score'] = 0.67 * ((data['ma_10'] - data['ma_20']) / data['ma_20']) + \
+                             0.33 * ((data['ma_20'] - data['ma_50']) / data['ma_50'])
+
+# Initialize portfolio variables
+initial_capital = 100000
+portfolio = pd.DataFrame(index=pd.date_range(start=start_date, end=end_date))
+portfolio['Total Value'] = initial_capital
+
+# Create a DataFrame to track position sizes
+position_sizes = pd.DataFrame(index=portfolio.index, columns=qqq_holdings)
+position_sizes = position_sizes.fillna(0)
+
+# Backtesting loop
+for date in portfolio.index:
+    if date not in stock_data[qqq_holdings[0]].index:
+        # If the date is not a trading day, carry forward the previous day's positions and portfolio value
+        if date != portfolio.index[0]:  # to handle the first day
+            position_sizes.loc[date] = position_sizes.loc[pd.Timestamp(date) - pd.Timedelta(days=1)]
+            portfolio.at[date, 'Total Value'] = portfolio.at[pd.Timestamp(date) - pd.Timedelta(days=1), 'Total Value']
+        continue
+
+    # Rank stocks based on momentum score for the current date
+    current_momentum_scores = {stock: stock_data[stock]['momentum_score'].loc[date] for stock in qqq_holdings}
+    ranked_stocks = pd.Series(current_momentum_scores).rank(pct=True)
+
+    # Calculate positions
+    for stock in qqq_holdings:
+        if ranked_stocks[stock] >= 0.9:
+            # Long the stock
+            position_sizes.loc[date, stock] = portfolio.at[date, 'Total Value'] * 0.5 / len(qqq_holdings)
+        elif ranked_stocks[stock] <= 0.1:
+            # Short the stock
+            position_sizes.loc[date, stock] = -portfolio.at[date, 'Total Value'] * 0.5 / len(qqq_holdings)
+
+    # Calculate daily portfolio value based on position sizes and stock returns
+    daily_value = portfolio.at[date, 'Total Value']
+    for stock in qqq_holdings:
+        stock_data_row = stock_data[stock].loc[date]
+        stock_return = (stock_data_row['Close'] / stock_data_row['Open']) - 1  # Daily return
+        daily_value += position_sizes.loc[date, stock] * (1 + stock_return)
+
+    portfolio.at[date, 'Total Value'] = daily_value
+
+# Calculate returns
+portfolio['Returns'] = portfolio['Total Value'].pct_change()
+
+# Plot the portfolio value over time
+plt.figure(figsize=(12, 6))
+plt.plot(portfolio['Total Value'], label='Portfolio Value')
+plt.title('Portfolio Value Over Time')
+plt.xlabel('Date')
+plt.ylabel('Total Portfolio Value')
+plt.legend()
+plt.show()
+
